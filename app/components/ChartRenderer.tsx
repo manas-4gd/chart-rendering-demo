@@ -26,23 +26,43 @@ const ChartLegend: React.FC<{ config: ChartConfig; data: ChartDataItem[] }> = ({
 
   // Extract unique categories/groups for categorical legends
   const getCategoricalLegend = () => {
-    const categories = new Map<string, { color?: string; count: number }>();
+    const categories = new Map<string, { color?: string; count: number; category?: string }>();
     
     data.forEach(item => {
-      const key = item.additional_data?.group || item.category || item.label;
-      const color = item.additional_data?.color || config.colors?.[key];
+      let key: string;
+      let color: string | undefined;
+      
+      // For bar charts, create unique keys for each category-label combination
+      if (config.type === 'bar' && item.additional_data?.color) {
+        // Create unique key combining category and label for items that might have duplicate labels
+        const hasDuplicateLabels = data.filter(d => d.label === item.label).length > 1;
+        key = hasDuplicateLabels ? `${item.category}:${item.label}` : item.label;
+        color = item.additional_data.color;
+      } else if (config.type === 'grouped_bar') {
+        // For grouped bar charts, use the series/group key
+        key = item.additional_data?.[config.seriesBy || 'series'] || item.label;
+        color = config.colors?.[key] || item.additional_data?.color;
+      } else if (config.type === 'pie') {
+        // For pie charts, use label with color
+        key = item.label;
+        color = item.additional_data?.color || config.colors?.[key];
+      } else {
+        // Default behavior for other chart types
+        key = item.additional_data?.group || item.category || item.label;
+        color = item.additional_data?.color || config.colors?.[key];
+      }
       
       if (categories.has(key)) {
         categories.get(key)!.count++;
       } else {
-        categories.set(key, { color, count: 1 });
+        categories.set(key, { color, count: 1, category: item.category });
       }
     });
     
     return categories;
   };
 
-  const shouldShowCategorical = config.type === 'pie' || config.type === 'grouped_bar' || 
+  const shouldShowCategorical = config.type === 'pie' || config.type === 'grouped_bar' || config.type === 'bar' ||
     (config.legend_config?.show_categories && config.colors);
 
   return (
@@ -64,7 +84,9 @@ const ChartLegend: React.FC<{ config: ChartConfig; data: ChartDataItem[] }> = ({
                 <div 
                   className="w-4 h-4 rounded border border-gray-300"
                   style={{
-                    backgroundColor: config.scale_info?.color_range?.[parseInt(value) - 1] || '#ccc'
+                    backgroundColor: config.scale_info?.color_range?.[parseInt(value) - config.scale_info.min_value] || 
+                                   config.scale_info?.color_range?.[0] || 
+                                   '#e0e0e0'
                   }}
                 />
                 <span className="text-gray-700">
@@ -85,26 +107,78 @@ const ChartLegend: React.FC<{ config: ChartConfig; data: ChartDataItem[] }> = ({
       {shouldShowCategorical && (
         <div>
           <h4 className="font-semibold text-sm text-gray-700 mb-2">
-            {config.type === 'pie' ? 'Categories:' : 'Legend:'}
+            {config.type === 'pie' ? 'Categories:' : config.type === 'bar' ? 'Items:' : 'Legend:'}
           </h4>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 text-xs">
-            {Array.from(getCategoricalLegend().entries()).map(([category, info]) => (
-              <div key={category} className="flex items-center space-x-2">
-                <div 
-                  className="w-4 h-4 rounded border border-gray-300"
-                  style={{
-                    backgroundColor: info.color || `hsl(${Array.from(category).reduce((a, b) => a + b.charCodeAt(0), 0) % 360}, 70%, 60%)`
-                  }}
-                />
-                <span className="text-gray-700 truncate" title={category}>
-                  {category}
-                  {config.type === 'pie' && info.count > 1 && (
-                    <span className="text-gray-500 ml-1">({info.count})</span>
-                  )}
-                </span>
-              </div>
-            ))}
-          </div>
+          
+          {/* For bar charts with multiple categories, group by category */}
+          {config.type === 'bar' && data.some(item => item.category) ? (
+            (() => {
+              const legendItems = Array.from(getCategoricalLegend().entries());
+              const categoryGroups = data.reduce((groups, item) => {
+                if (!groups[item.category]) groups[item.category] = [];
+                
+                // Handle both simple and composite keys
+                const hasDuplicateLabels = data.filter(d => d.label === item.label).length > 1;
+                const searchKey = hasDuplicateLabels ? `${item.category}:${item.label}` : item.label;
+                
+                const legendItem = legendItems.find(([key]) => key === searchKey);
+                if (legendItem && !groups[item.category].some(existing => existing[0] === legendItem[0])) {
+                  // Store the original label for display, not the composite key
+                  const displayItem: [string, { color?: string; count: number; category?: string }] = [
+                    item.label, // Use original label for display
+                    legendItem[1] // Keep the color and other metadata
+                  ];
+                  groups[item.category].push(displayItem);
+                }
+                return groups;
+              }, {} as Record<string, Array<[string, { color?: string; count: number; category?: string }]>>);
+              
+              return Object.entries(categoryGroups).map(([category, items]) => (
+                <div key={category} className="mb-3">
+                  <h5 className="font-medium text-xs text-gray-600 mb-1 uppercase tracking-wide">{category}:</h5>
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 text-xs pl-2">
+                    {items.map(([itemKey, info], index) => (
+                      <div key={`${category}-${itemKey}-${index}`} className="flex items-center space-x-2">
+                        <div 
+                          className="w-4 h-4 rounded border border-gray-300"
+                          style={{
+                            backgroundColor: info.color || 
+                              `hsl(${(itemKey.split('').reduce((a, b) => a + b.charCodeAt(0), 0) * 137.508) % 360}, 65%, 55%)`
+                          }}
+                        />
+                        <span className="text-gray-700 truncate" title={itemKey}>
+                          {itemKey}
+                          {info.count > 1 && (
+                            <span className="text-gray-500 ml-1">({info.count})</span>
+                          )}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ));
+            })()
+          ) : (
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 text-xs">
+              {Array.from(getCategoricalLegend().entries()).map(([category, info]) => (
+                <div key={category} className="flex items-center space-x-2">
+                  <div 
+                    className="w-4 h-4 rounded border border-gray-300"
+                    style={{
+                      backgroundColor: info.color || 
+                        `hsl(${(category.split('').reduce((a, b) => a + b.charCodeAt(0), 0) * 137.508) % 360}, 65%, 55%)`
+                    }}
+                  />
+                  <span className="text-gray-700 truncate" title={category}>
+                    {category}
+                    {config.type === 'pie' && info.count > 1 && (
+                      <span className="text-gray-500 ml-1">({info.count})</span>
+                    )}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -239,7 +313,7 @@ const processScatterData = (data: ChartDataItem[], config: ChartConfig): any[] =
       mode: 'markers',
       marker: { 
         color: config.colors?.[s.name],
-        size: data.map((item: ChartDataItem) => item.additional_data?.size || 8)
+        size: data.map((item: ChartDataItem) => item.additional_data?.size || 10)
       }
     }));
   } else {
@@ -251,7 +325,7 @@ const processScatterData = (data: ChartDataItem[], config: ChartConfig): any[] =
       type: 'scatter',
       mode: 'markers',
       marker: {
-        size: data.map((item: ChartDataItem) => item.additional_data?.size || 8),
+        size: data.map((item: ChartDataItem) => item.additional_data?.size || 10),
         color: data.map((item: ChartDataItem) => item.additional_data?.color)
       }
     }];
@@ -293,10 +367,23 @@ const processHeatmapData = (data: ChartDataItem[], config: ChartConfig): any[] =
     xArray.map((x: string) => matrix[y]?.[x] || 0)
   );
 
-  // Use color range from config if available, otherwise default
-  const colorscale = config.scale_info?.color_range ? 
-    config.scale_info.color_range.map((color, i) => [i / (config.scale_info!.color_range!.length - 1), color]) :
-    config.colorscale || 'RdYlGn';
+  // Use color range from config if available, otherwise use smart default
+  let colorscale;
+  if (config.scale_info?.color_range) {
+    colorscale = config.scale_info.color_range.map((color, i) => [i / (config.scale_info!.color_range!.length - 1), color]);
+  } else if (config.colorscale) {
+    colorscale = config.colorscale;
+  } else {
+    // Smart default based on scale type
+    const scaleType = config.scale_info?.scale_type || 'general';
+    if (scaleType.includes('performance') || scaleType.includes('rating')) {
+      colorscale = 'RdYlGn'; // Red-Yellow-Green for performance
+    } else if (scaleType.includes('frequency')) {
+      colorscale = 'Blues'; // Blue gradient for frequency
+    } else {
+      colorscale = 'Viridis'; // General purpose
+    }
+  }
 
   return [{
     z: z,
