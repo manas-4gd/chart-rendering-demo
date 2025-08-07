@@ -28,16 +28,26 @@ const ChartLegend: React.FC<{ config: ChartConfig; data: ChartDataItem[] }> = ({
   const getCategoricalLegend = () => {
     const categories = new Map<string, { color?: string; count: number; category?: string }>();
     
-    data.forEach(item => {
+    data.forEach((item, index) => {
       let key: string;
       let color: string | undefined;
       
-      // For bar charts, create unique keys for each category-label combination
-      if (config.type === 'bar' && item.additional_data?.color) {
+      // For bar charts, always create legends (with or without explicit colors)
+      if (config.type === 'bar') {
         // Create unique key combining category and label for items that might have duplicate labels
         const hasDuplicateLabels = data.filter(d => d.label === item.label).length > 1;
         key = hasDuplicateLabels ? `${item.category}:${item.label}` : item.label;
-        color = item.additional_data.color;
+        
+        // Use the same color logic as processBarData
+        if (item.additional_data?.color) {
+          color = item.additional_data.color;
+        } else if (config.colors?.[item.label]) {
+          color = config.colors[item.label];
+        } else {
+          // Generate consistent color using the same algorithm as processBarData
+          const colorKey = hasDuplicateLabels ? `${item.category}:${item.label}` : item.label;
+          color = `hsl(${(colorKey.split('').reduce((a, b) => a + b.charCodeAt(0), 0) * 137.508) % 360}, 65%, 55%)`;
+        }
       } else if (config.type === 'grouped_bar') {
         // For grouped bar charts, use the series/group key
         key = item.additional_data?.[config.seriesBy || 'series'] || item.label;
@@ -202,13 +212,28 @@ const ChartLegend: React.FC<{ config: ChartConfig; data: ChartDataItem[] }> = ({
 const processBarData = (data: ChartDataItem[], config: ChartConfig): any[] => {
   const x = data.map((item: ChartDataItem) => item.label);
   const y = data.map((item: ChartDataItem) => item.value);
-  const colors = data.map((item: ChartDataItem) => item.additional_data?.color || config.colors?.[item.label]);
+  
+  // Generate consistent colors for each item
+  const colors = data.map((item: ChartDataItem, index) => {
+    // First try explicit color from data
+    if (item.additional_data?.color) {
+      return item.additional_data.color;
+    }
+    // Then try config colors
+    if (config.colors?.[item.label]) {
+      return config.colors[item.label];
+    }
+    // Finally, generate consistent color using the same algorithm as legend
+    const hasDuplicateLabels = data.filter(d => d.label === item.label).length > 1;
+    const colorKey = hasDuplicateLabels ? `${item.category}:${item.label}` : item.label;
+    return `hsl(${(colorKey.split('').reduce((a, b) => a + b.charCodeAt(0), 0) * 137.508) % 360}, 65%, 55%)`;
+  });
 
   return [{
     x: x,
     y: y,
     type: 'bar',
-    marker: { color: colors.filter(Boolean).length > 0 ? colors : undefined }
+    marker: { color: colors }
   }];
 };
 
